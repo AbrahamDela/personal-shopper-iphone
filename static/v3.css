@@ -1,4 +1,10 @@
 .photo-upload-row{align-items:end;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px}
+.sidebar{overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:thin;scrollbar-color:#a3b48c #f0f3ed}
+.sidebar>.brand,.sidebar>.nav-label,.sidebar>nav,.sidebar>.sidebar-bottom{flex-shrink:0}
+.sidebar::-webkit-scrollbar{width:6px;height:6px}
+.sidebar::-webkit-scrollbar-thumb{background:#a3b48c;border-radius:6px}
+.sidebar::-webkit-scrollbar-track{background:#f0f3ed}
+@media(max-width:760px){.sidebar{overflow:visible}.sidebar nav{overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#a3b48c #f0f3ed;padding-bottom:8px}.sidebar nav a{flex:0 0 auto}.sidebar nav::-webkit-scrollbar{height:6px}.sidebar nav::-webkit-scrollbar-thumb{background:#a3b48c;border-radius:6px}}
 .photo-upload-row button{align-self:end}
 .danger-zone{border-color:#b64b3b}
 .danger-zone h2{color:#8c2f22}
