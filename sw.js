@@ -1,6 +1,6 @@
 'use strict';
 const PREFIX='al-dia-iphone-';
-const CACHE=PREFIX+'270bcefcd4e47d2b48bf740c';
+const CACHE=PREFIX+'6afe849335dbf1ed87f43dd4';
 // Install the entire distribution atomically, including Python and all wheels.
 self.addEventListener('install',event=>event.waitUntil((async()=>{
   const manifest=await (await fetch('assets.json',{cache:'no-store'})).json();

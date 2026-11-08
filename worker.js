@@ -1,6 +1,6 @@
 'use strict';
 importScripts('runtime/pyodide.js');
-let py,db,snapshot,queue=Promise.resolve();
+let py,db,snapshot,savedSession=null,queue=Promise.resolve();
 const DBPATH='/data/shopper.sqlite';
 const BLOCK_SIZE=4*1024*1024;
 const BACKUP_DIR='/backup-input';
@@ -22,13 +22,20 @@ async function initialize(){
   py.FS.mkdirTree('/data');
   py.FS.mkdirTree(BACKUP_DIR);
   snapshot=await loadSnapshot();
+  savedSession=snapshot?.secret?await readStorage('session')??null:null;
   const secret=snapshot?.secret||Array.from(crypto.getRandomValues(new Uint8Array(32))).map(n=>n.toString(16).padStart(2,'0')).join('');
   py.globals.set('local_secret',secret);
-  await py.runPythonAsync("import sys\nsys.path.insert(0,'/app')\nimport local_wsgi\nlocal_wsgi.start('/data/shopper.sqlite',local_secret)");
+  py.globals.set('local_session',savedSession);
+  await py.runPythonAsync("import sys\nsys.path.insert(0,'/app')\nimport local_wsgi\nlocal_wsgi.start('/data/shopper.sqlite',local_secret,local_session)");
+  py.globals.delete('local_session');
   await persist(secret);
   return true;
 }
-async function persist(secret=snapshot.secret){
+function writeSession(store,token){
+  if(token)store.put(token,'session');
+  else store.delete('session');
+}
+async function persist(secret=snapshot.secret,token=savedSession){
   const size=py.FS.stat(DBPATH).size;
   const next={secret,size,blocks:Math.ceil(size/BLOCK_SIZE)};
   const file=py.FS.open(DBPATH,'r');
@@ -38,7 +45,7 @@ async function persist(secret=snapshot.secret){
         try{
           if(index===next.blocks){
             for(let i=index;i<(snapshot?.blocks||0);i++)store.delete(`database:${i}`);
-            store.put(next,'database');return;
+            store.put(next,'database');writeSession(store,token);return;
           }
           const offset=index*BLOCK_SIZE,block=new Uint8Array(Math.min(BLOCK_SIZE,size-offset));
           if(py.FS.read(file,block,0,block.length,offset)!==block.length)throw Error('Lectura incompleta');
@@ -48,6 +55,7 @@ async function persist(secret=snapshot.secret){
       write(0);
     });
     snapshot=next;
+    savedSession=token;
   }finally{py.FS.close(file);}
 }
 function readStorage(key){
@@ -88,10 +96,21 @@ async function handle(message){
     if(mounted)py.FS.unmount(BACKUP_DIR);
     py.globals.delete('request_body');
   }
-  try{if(message.method==='POST'&&result.status<400)await persist();}catch(error){
+  const token=result.session;delete result.session;
+  const authOnly=['/login','/salir'].includes(message.path.split('?')[0]);
+  const wroteDatabase=message.method==='POST'&&result.status<400&&!authOnly;
+  try{
+    if(wroteDatabase)await persist(snapshot.secret,token);
+    else if(token!==savedSession){
+      await transaction('readwrite',store=>writeSession(store,token));
+      savedSession=token;
+    }
+  }catch(error){
     // Do not acknowledge a write that IndexedDB did not commit.
-    snapshot=await loadSnapshot();
-    py.runPython("local_wsgi.client=local_wsgi.app.test_client()");
+    if(wroteDatabase)snapshot=await loadSnapshot();
+    py.globals.set('local_session',savedSession);
+    py.runPython('local_wsgi.reset_client(local_session)');
+    py.globals.delete('local_session');
     throw Error('No se pudo guardar en el dispositivo. Libera espacio y vuelve a abrir la app. La operación no fue guardada.');
   }
   return result;
