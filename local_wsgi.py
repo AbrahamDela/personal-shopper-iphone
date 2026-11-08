@@ -1,9 +1,10 @@
 """Runs the unchanged business application inside Pyodide. No network server."""
 import base64
-import io
 import json
 import os
-from pathlib import Path
+
+BACKUP_ROUTE = '/configuracion/restaurar'
+BACKUP_PATH = '/backup-input/respaldo.json'
 
 
 def start(database, secret):
@@ -15,6 +16,10 @@ def start(database, secret):
     import shopper
     shopper.trusted_hosts = lambda: ['localhost']
     app = create_app({'TRUSTED_HOSTS': ['localhost'], 'GEMINI_API_KEY': None})
+    from shopper.db import get_db
+    with app.app_context():
+        # A rollback journal avoids a second full-size database in the WASM filesystem.
+        get_db().execute('PRAGMA journal_mode=DELETE')
     from flask import request, jsonify
     from shopper import gemini, files
 
@@ -38,11 +43,20 @@ def start(database, secret):
     client = app.test_client()
 
 
-def dispatch(path, method='GET', body=b'', content_type=None):
+def dispatch(path, method='GET', body=b'', content_type=None, mounted_backup=False):
     if not path.startswith('/') or path.startswith('//'):
         raise ValueError('Ruta local inválida')
-    response = client.open(path, method=method, data=bytes(body),
-                           content_type=content_type, follow_redirects=True)
+    if mounted_backup:
+        if path != BACKUP_ROUTE or method != 'POST':
+            raise ValueError('Ruta de respaldo inválida')
+        from werkzeug.datastructures import FileStorage
+        with open(BACKUP_PATH, 'rb') as stream:
+            response = client.open(path, method=method, data=bytes(body), content_type=content_type,
+                                   environ_overrides={'shopper.local_backup': FileStorage(stream, filename='respaldo.json')},
+                                   follow_redirects=True)
+    else:
+        response = client.open(path, method=method, data=bytes(body),
+                               content_type=content_type, follow_redirects=True)
     return json.dumps({'status': response.status_code,
                        'headers': dict(response.headers),
                        'path': response.request.full_path.rstrip('?'),

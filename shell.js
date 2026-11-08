@@ -2,7 +2,7 @@ const frame=document.querySelector('#app'),status=document.querySelector('#statu
 const root=new URL('./',location.href);let worker,sequence=0,ready=false,offline=false,key='',model='gemini-flash-latest';
 const pending=new Map();let navigation=Promise.resolve(),imageURLs=[];
 function rpc(message){return new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});worker.postMessage({id,...message});});}
-function bytes(text){return Uint8Array.from(atob(text),c=>c.charCodeAt(0));}
+function bytes(text){const binary=atob(text),out=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);return out;}
 function response(result){return new Response(bytes(result.body),{status:result.status,headers:result.headers});}
 const notice=()=>{status.textContent=offline?'Lista para usar sin conexión · Datos guardados en este dispositivo':'App abierta · Espera a que termine la descarga para usarla sin conexión';};
 window.localPath=value=>{
@@ -12,15 +12,28 @@ window.localPath=value=>{
   if(path.startsWith(root.pathname))path='/'+path.slice(root.pathname.length);
   return path+url.search;
 };
+async function requestData(path,body){
+  if(Object.prototype.toString.call(body)==='[object FormData]'){
+    if(path==='/configuracion/restaurar'){
+      const backupFile=body.get('backup');
+      if(backupFile?.size){
+        const fields=new URLSearchParams({csrf:body.get('csrf')||'',confirmation:body.get('confirmation')||''});
+        return {backupFile,body:new TextEncoder().encode(fields.toString()).buffer,contentType:'application/x-www-form-urlencoded'};
+      }
+    }
+    const request=new Request(root,{method:'POST',body});
+    return {body:await request.arrayBuffer(),contentType:request.headers.get('Content-Type')};
+  }
+  if(Object.prototype.toString.call(body)==='[object URLSearchParams]')return {body:new TextEncoder().encode(body.toString()).buffer,contentType:'application/x-www-form-urlencoded;charset=UTF-8'};
+  if(typeof body==='string')return {body:new TextEncoder().encode(body).buffer,contentType:'text/plain'};
+  return {body};
+}
 window.localRequest=async(path,options={})=>{
   path=window.localPath(path);
-  let body=options.body,contentType;
-  if(Object.prototype.toString.call(body)==='[object FormData]'){const req=new Request(root,{method:'POST',body});body=await req.arrayBuffer();contentType=req.headers.get('Content-Type');}
-  else if(Object.prototype.toString.call(body)==='[object URLSearchParams]'){contentType='application/x-www-form-urlencoded;charset=UTF-8';body=new TextEncoder().encode(body.toString()).buffer;}
-  else if(typeof body==='string'){body=new TextEncoder().encode(body).buffer;contentType='text/plain';}
+  const request=await requestData(path,options.body);
   if(path==='/compras/analizar-fotos'){
     if(!key)return Response.json({error:'Configura Gemini desde Instalación y Gemini.'},{status:400});
-    const prepared=response(await rpc({path:'/__local/ai/prepare',method:'POST',body,contentType}));
+    const prepared=response(await rpc({path:'/__local/ai/prepare',method:'POST',...request}));
     if(!prepared.ok||!prepared.headers.get('Content-Type')?.includes('application/json'))return prepared;
     const {parts}=await prepared.json();
     try{
@@ -37,7 +50,7 @@ window.localRequest=async(path,options={})=>{
       return window.localRequest('/__local/ai/normalize',{method:'POST',body:new URLSearchParams({csrf,result:JSON.stringify(JSON.parse(json))})});
     }catch(error){return Response.json({error:error.name==='TypeError'?'No se pudo conectar con Gemini. Comprueba Internet.':error.message},{status:400});}
   }
-  return response(await rpc({path,method:options.method||'GET',body,contentType}));
+  return response(await rpc({path,method:options.method||'GET',...request}));
 };
 async function download(result){
   const blob=new Blob([bytes(result.body)],{type:result.headers['Content-Type']||'application/octet-stream'});
@@ -53,9 +66,9 @@ window.localNavigate=(path,options={},history=true)=>{
   navigation=navigation.then(async()=>{
     status.textContent='Abriendo y comprobando guardado local…';
     const normalized=window.localPath(path);
-    let body=options.body,contentType;
-    if(Object.prototype.toString.call(body)==='[object FormData]'){const req=new Request(root,{method:'POST',body});body=await req.arrayBuffer();contentType=req.headers.get('Content-Type');}
-    const result=await rpc({path:normalized,method:options.method||'GET',body,contentType});
+    const request=await requestData(normalized,options.body);
+    if(request.backupFile)status.textContent='Validando y restaurando el respaldo. Mantén abierta la app…';
+    const result=await rpc({path:normalized,method:options.method||'GET',...request});
     if(result.headers['Content-Disposition']?.includes('attachment')){await download(result);notice();return;}
     if(!result.headers['Content-Type']?.includes('text/html'))throw Error('Respuesta local inesperada.');
     for(const url of imageURLs)URL.revokeObjectURL(url);imageURLs=[];
